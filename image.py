@@ -10,6 +10,9 @@ class Image:
         Create a new Image from a file or a 2D array
 
         :param data: The path of the file or the 2D array to use
+        :raises ValueError: if matrix is invalid
+        :raises ValueError: if path points to invalid file
+        :raises ValueError: if data has an invalid format
         """
         if type(data) == list:
             # Load from array
@@ -46,14 +49,14 @@ class Image:
 
         # Check if file exists
         if not os.path.isfile(path):
-            raise ValueError(path + " doesn't exist")
+            raise ValueError(path + " doesn't exist.")
 
         file = open(path, 'rb')
 
         # Make sure correct file type (file signature)
         signature = file.read(4)
         if signature != _FILE_SIGNATURE:
-            raise ValueError(path + "doesn't seem to point to a limg file.")
+            raise ValueError(path + " doesn't seem to point to a limg file.")
 
         # Read width/height bytes
         self._width = int.from_bytes(file.read(2), "big")
