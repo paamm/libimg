@@ -1,81 +1,97 @@
 import os.path
-from typing import List, Any, Union
-
-_FILE_SIGNATURE = b'LIMG'
+from typing import List, Any
 
 
 class Image:
-    def __init__(self, data: Union[List[List[Any]], str]):
-        """
-        Create a new Image from a file or a 2D array
+    # Constants
+    _FILE_SIGNATURE = b'LIMG'
+    Format_BW = 0
 
-        :param data: The path of the file or the 2D array to use
-        :raises ValueError: if matrix is invalid
+    def __init__(self, array: List[List[Any]], image_format: int):
+        """
+        Create the object from an array
+
+        :param array: The array to use as a source
+        :param image_format: The format of the array
         :raises ValueError: if path points to invalid file
-        :raises ValueError: if data has an invalid format
         """
-        if type(data) == list:
-            # Load from array
-            self._from_array(data)
-        elif type(data) == str:
-            self._from_file(data)
-        else:
-            # Invalid type for data
-            raise ValueError("Data must be either a 2D list or a path to a file.")
 
-    def _from_array(self, array: List[List[Any]]):
-        """
-        Create the object with an array as the source
+        def validate_array(array: List[List[Any]]):
+            if self._image_format == self.Format_BW:
+                # B & W mode, pixels should be either 1 or 0
+                for row in array:
+                    for pixel in row:
+                        if int(pixel) not in [0, 1]:
+                            raise ValueError("Format_BW pixels should have a value of 0 or 1.")
 
-        :param array: The array to use
-        """
         self._data = array
+        self._image_format = image_format
 
         self._height = len(array)
-        # Make sure array is same length horizontally everywhere
         self._width = len(array[0])
-        for line in self._data:
-            if len(line) != self._width:
+
+        # Check that array has same row length on every row
+        for row in self._data:
+            if len(row) != self._width:
                 raise ValueError("Every line in the array must have the same length.")
 
-        self._data = array
+        try:
+            validate_array(self._data)
+        except ValueError as e:
+            print("Invalid image file: {}".format(str(e)))
+            raise ValueError("Invalid image file, check logs for details.")
 
-    def _from_file(self, path: str) -> None:
+    @classmethod
+    def from_file(cls, filepath: str):
         """
-        Create the object by reading a file from disk
+        Creates an object based on a file
 
-        :param path: The path of the file to read
+        :param filepath: file of the path to use
+        :return: An Image object
+        :raises ValueError: if the filepath points to an invalid file
         """
 
-        # Check if file exists
-        if not os.path.isfile(path):
-            raise ValueError(path + " doesn't exist.")
+        def binary_to_data(binary: bytes, image_format: int, width: int, height: int) -> List[List[Any]]:
+            # Convert bytes to binary string
+            binary_str = ""
+            for byte in binary:
+                binary_str += "{0:08b}".format(byte)
 
-        file = open(path, 'rb')
+            result = [[0 for _ in range(width)] for _ in range(height)]  # Creates array with specified dimensions
+            if image_format == cls.Format_BW:
+                # B & W, each pixel is a single bit of 1 or 0
+                i = 0
+                for row in range(len(result)):
+                    for col in range(len(result[0])):
+                        result[row][col] = int(binary_str[i])
+                        i += 1
+            return result
 
-        # Make sure correct file type (file signature)
+        # Check that file exists
+        if not os.path.isfile(filepath):
+            raise ValueError(filepath + " doesn't exist.")
+
+        file = open(filepath, 'rb')
+
+        # Check signature
         signature = file.read(4)
-        if signature != _FILE_SIGNATURE:
-            raise ValueError(path + " doesn't seem to point to a limg file.")
+        if signature != cls._FILE_SIGNATURE:
+            raise ValueError(filepath + " doesn't seem to point to a limg file.")
 
-        # Read width/height bytes
-        self._width = int.from_bytes(file.read(2), "big")
-        self._height = int.from_bytes(file.read(2), "big")
+        # Read dimensions
+        width = int.from_bytes(file.read(2), "big")
+        height = int.from_bytes(file.read(2), "big")
+
+        # Read image format
+        image_format = int.from_bytes(file.read(1), "big")
+
+        # Read data
         data = file.read()
         file.close()
 
-        # Read the image bytes and create a "stream" by converting to bytes to binary
-        data_stream = ""
-        for byte in data:
-            data_stream += "{0:08b}".format(byte)
-
-        # Fill _data
-        i = 0
-        self._data = [[0 for _ in range(self._width)] for _ in range(self._height)]
-        for row in range(self._height):
-            for col in range(self._width):
-                self._data[row][col] = int(data_stream[i])
-                i += 1
+        # Convert data from binary to pixel array
+        data = binary_to_data(data, image_format, width, height)
+        return Image(data, image_format)
 
     def write_to_file(self, path: str) -> None:
         """
@@ -83,6 +99,22 @@ class Image:
 
         :param path: The path of the file to write to
         """
+
+        def data_to_binary() -> str:
+            """
+            Takes the _data array and creates its binary representation based on the _image_format
+
+            :return: The binary representation to write to a file.
+            """
+
+            result = ""
+            if self._image_format == self.Format_BW:
+                # Data is already in bits, append each pixel to result
+                for row in self._data:
+                    for pixel in row:
+                        result += str(pixel)
+            return result
+
         # Create the path
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -91,21 +123,18 @@ class Image:
             path += ".limg"
 
         file = open(path, 'wb')
-        file.write(_FILE_SIGNATURE)
+        file.write(self._FILE_SIGNATURE)
 
-        # Write image dimension
-        binary_dimension = "{0:016b}{1:016b}".format(self._width, self._height)
-        # Split in groups of 8 and convert from binary to base 10
-        bytes_array = [int(binary_dimension[i:i+8], 2) for i in range(0, len(binary_dimension), 8)]
-        file.write(bytes(bytes_array))
+        binary_data = ""
 
-        # TODO write img "mode" or something when implemented
+        # Write image dimension (2 bytes per dimension)
+        binary_data += "{0:016b}{1:016b}".format(self._width, self._height)
+
+        # Write image mode byte
+        binary_data += "{0:08b}".format(self._image_format)
 
         # Write data to file
-        binary_data = ""
-        for row in self._data:
-            for element in row:
-                binary_data += str(element)
+        binary_data += data_to_binary()
 
         # pad end with 0s to fill bytes
         missing = 8 - len(binary_data) % 8
@@ -122,6 +151,9 @@ class Image:
 
     def get_height(self) -> int:
         return self._height
+
+    def get_image_format(self) -> int:
+        return self._image_format
 
     def to_array(self) -> List[List[str]]:
         # convert every element into a string to have a uniform export
